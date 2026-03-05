@@ -1,0 +1,20 @@
+// firestore.rules
+// Simple rules for event day — open read/write for all (no auth needed for MVP)
+// UPGRADE AFTER EVENT: Restrict to authenticated users only
+
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Guests collection — allow all reads and writes
+    // This is intentional for an MVP event app where all staff share access
+    match /guests/{guestId} {
+      allow read, write: if true;
+    }
+
+    // Block everything else
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
