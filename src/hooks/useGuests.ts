@@ -29,6 +29,7 @@ export interface GuestStats {
   checkedIn: number;
   remaining: number;
   walkIns: number;
+  totalTickets: number;
 }
 
 export interface UseGuestsReturn {
@@ -105,8 +106,15 @@ export function useGuests(): UseGuestsReturn {
   // Add a walk-in guest and immediately check them in
   const addGuest = async (data: Partial<Guest>): Promise<string> => {
     const deviceName = getDeviceName();
+    // Generate a numeric-ish id for ordering (max existing + 1)
+    const maxId = guests.reduce((max, g) => {
+      const n = parseInt(g.id);
+      return !isNaN(n) && n > max ? n : max;
+    }, 0);
+    const nextId = String(maxId + 1);
     // Build doc — Firestore rejects undefined values, so only include defined fields
     const doc_data: Record<string, any> = {
+      id: nextId,
       name: data.name?.trim() || 'Unknown',
       plusOne: data.plusOne ?? false,
       tickets: data.tickets ?? 1,
@@ -131,6 +139,7 @@ export function useGuests(): UseGuestsReturn {
     checkedIn: guests.filter((g) => g.checkedIn).length,
     remaining: guests.filter((g) => !g.checkedIn).length,
     walkIns: guests.filter((g) => g.addedOnSite).length,
+    totalTickets: guests.reduce((sum, g) => sum + (g.tickets || 1), 0),
   };
 
   return { guests, loading, isOnline, checkIn, undoCheckIn, addGuest, stats };
