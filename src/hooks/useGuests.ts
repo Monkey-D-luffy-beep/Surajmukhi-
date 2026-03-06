@@ -5,10 +5,9 @@ import {
   onSnapshot,
   doc,
   updateDoc,
-  addDoc,
+  setDoc,
   serverTimestamp,
   query,
-  orderBy,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import type { Guest } from '../data/guests';
@@ -62,15 +61,24 @@ export function useGuests(): UseGuestsReturn {
   // Real-time Firestore subscription
   // onSnapshot fires immediately from IndexedDB cache (offline), then from server
   useEffect(() => {
-    const q = query(collection(db, COLLECTION), orderBy('id'));
+    const q = query(collection(db, COLLECTION));
     const unsubscribe = onSnapshot(
       q,
       { includeMetadataChanges: false },
       (snapshot) => {
-        const data = snapshot.docs.map((doc) => ({
-          ...(doc.data() as Guest),
-          id: doc.id,
+        const data = snapshot.docs.map((d) => ({
+          ...(d.data() as Guest),
+          id: d.id,           // Firestore document ID
         }));
+        // Sort client-side: numeric IDs first (ascending), then non-numeric
+        data.sort((a, b) => {
+          const na = parseInt(a.id);
+          const nb = parseInt(b.id);
+          if (!isNaN(na) && !isNaN(nb)) return na - nb;
+          if (!isNaN(na)) return -1;
+          if (!isNaN(nb)) return 1;
+          return a.name.localeCompare(b.name);
+        });
         setGuests(data);
         setLoading(false);
       },
@@ -106,7 +114,7 @@ export function useGuests(): UseGuestsReturn {
   // Add a walk-in guest and immediately check them in
   const addGuest = async (data: Partial<Guest>): Promise<string> => {
     const deviceName = getDeviceName();
-    // Generate a numeric-ish id for ordering (max existing + 1)
+    // Generate next numeric id
     const maxId = guests.reduce((max, g) => {
       const n = parseInt(g.id);
       return !isNaN(n) && n > max ? n : max;
@@ -114,7 +122,6 @@ export function useGuests(): UseGuestsReturn {
     const nextId = String(maxId + 1);
     // Build doc — Firestore rejects undefined values, so only include defined fields
     const doc_data: Record<string, any> = {
-      id: nextId,
       name: data.name?.trim() || 'Unknown',
       plusOne: data.plusOne ?? false,
       tickets: data.tickets ?? 1,
@@ -130,8 +137,10 @@ export function useGuests(): UseGuestsReturn {
     if (data.category) doc_data.category = data.category;
     if (data.notes) doc_data.notes = data.notes;
 
-    const docRef = await addDoc(collection(db, COLLECTION), doc_data);
-    return docRef.id;
+    // Use setDoc with the numeric ID as the document ID (like seeded docs)
+    const ref = doc(db, COLLECTION, nextId);
+    await setDoc(ref, doc_data);
+    return nextId;
   };
 
   const stats: GuestStats = {

@@ -1,12 +1,12 @@
 // src/components/ManageGuests.tsx
-// Pre-event guest list management — spreadsheet-style table UI
-import React, { useState } from 'react';
+// Excel-like inline-editable spreadsheet for pre-event guest management
+import React, { useState, useRef, useEffect } from 'react';
 import type { Guest } from '../data/guests';
 import {
   doc,
   deleteDoc,
   updateDoc,
-  addDoc,
+  setDoc,
   collection,
 } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -16,127 +16,220 @@ interface ManageGuestsProps {
   onBack: () => void;
 }
 
-const COLLECTION = 'guests';
+const COLL = 'guests';
 
-const TYPE_BG: Record<string, string> = {
-  Guest: 'bg-blue-50 text-blue-700',
-  Longform: 'bg-purple-50 text-purple-700',
-  Influencers: 'bg-orange-50 text-orange-700',
-};
-
-// ── Edit / Add Modal ──────────────────────────────────
-function EditModal({
-  guest,
-  onSave,
-  onCancel,
-  title,
+// ── Editable Cell ─────────────────────────────────────
+function EditableCell({
+  value,
+  onChange,
+  type = 'text',
+  className = '',
+  placeholder = '',
+  min,
+  max,
 }: {
-  guest: Partial<Guest> & { id?: string };
-  onSave: (data: Record<string, any>) => void;
-  onCancel: () => void;
-  title: string;
+  value: string | number;
+  onChange: (val: string) => void;
+  type?: 'text' | 'number' | 'tel' | 'email';
+  className?: string;
+  placeholder?: string;
+  min?: number;
+  max?: number;
 }) {
-  const [name, setName] = useState(guest.name ?? '');
-  const [phone, setPhone] = useState(guest.phone ?? '');
-  const [email, setEmail] = useState(guest.email ?? '');
-  const [tickets, setTickets] = useState(guest.tickets ?? 1);
-  const [plusOne, setPlusOne] = useState(guest.plusOne ?? false);
-  const [type, setType] = useState<'Guest' | 'Longform' | 'Influencers'>(
-    guest.type ?? 'Guest'
-  );
-  const [category, setCategory] = useState(guest.category ?? '');
-  const [notes, setNotes] = useState(guest.notes ?? '');
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(String(value));
+  const ref = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  useEffect(() => {
+    if (editing) ref.current?.focus();
+  }, [editing]);
+
+  if (!editing) {
+    return (
+      <span
+        onClick={() => setEditing(true)}
+        className={`cursor-pointer hover:bg-sunflower-100 px-1 py-0.5 rounded block truncate min-h-[20px] ${className}`}
+        title="Click to edit"
+      >
+        {value || <span className="text-gray-300">{placeholder || '—'}</span>}
+      </span>
+    );
+  }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md shadow-xl max-h-[90vh] overflow-y-auto">
-        <div className="p-5">
-          <h2 className="text-lg font-bold text-gray-900 mb-4">{title}</h2>
-          <div className="space-y-3">
-            <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1">Name *</label>
-              <input type="text" value={name} onChange={(e) => setName(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-sunflower-400 focus:border-sunflower-400 focus:outline-none" autoFocus />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1">Phone</label>
-                <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-sunflower-400 focus:border-sunflower-400 focus:outline-none" />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1">Email</label>
-                <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
-                  className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-sunflower-400 focus:border-sunflower-400 focus:outline-none" />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1">Tickets</label>
-                <input type="number" inputMode="numeric" min={1} max={20} value={tickets}
-                  onChange={(e) => setTickets(Number(e.target.value) || 1)}
-                  className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-sunflower-400 focus:border-sunflower-400 focus:outline-none" />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1">Type</label>
-                <select value={type} onChange={(e) => setType(e.target.value as any)}
-                  className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm bg-white focus:ring-2 focus:ring-sunflower-400 focus:border-sunflower-400 focus:outline-none">
-                  <option value="Guest">Guest</option>
-                  <option value="Longform">Longform</option>
-                  <option value="Influencers">Influencers</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-gray-600 mb-1">Category</label>
-                <input type="text" value={category} onChange={(e) => setCategory(e.target.value)}
-                  placeholder="e.g. Simar, TTP"
-                  className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-sunflower-400 focus:border-sunflower-400 focus:outline-none" />
-              </div>
-              <div className="flex items-end pb-1">
-                <label className="flex items-center gap-2 text-sm font-medium text-gray-600">
-                  <input type="checkbox" checked={plusOne} onChange={(e) => setPlusOne(e.target.checked)}
-                    className="w-4 h-4 rounded text-sunflower-500 focus:ring-sunflower-400" />
-                  Plus +1
-                </label>
-              </div>
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-gray-600 mb-1">Notes</label>
-              <input type="text" value={notes} onChange={(e) => setNotes(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg border border-gray-300 text-sm focus:ring-2 focus:ring-sunflower-400 focus:border-sunflower-400 focus:outline-none" />
-            </div>
-          </div>
-          <div className="flex gap-2 mt-5">
-            <button onClick={onCancel}
-              className="flex-1 py-2.5 rounded-lg border border-gray-300 text-sm font-medium text-gray-600 hover:bg-gray-50">
-              Cancel
-            </button>
-            <button
-              onClick={() => {
-                if (!name.trim()) return;
-                const data: Record<string, any> = { name: name.trim(), tickets, plusOne, type };
-                if (phone.trim()) data.phone = phone.trim();
-                else data.phone = '';
-                if (email.trim()) data.email = email.trim();
-                else data.email = '';
-                if (category.trim()) data.category = category.trim();
-                else data.category = '';
-                if (notes.trim()) data.notes = notes.trim();
-                else data.notes = '';
-                onSave(data);
-              }}
-              disabled={!name.trim()}
-              className="flex-1 py-2.5 rounded-lg bg-sunflower-500 text-white text-sm font-bold hover:bg-sunflower-600 disabled:opacity-50">
-              Save
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
+    <input
+      ref={ref}
+      type={type}
+      inputMode={type === 'number' ? 'numeric' : type === 'tel' ? 'tel' : undefined}
+      value={draft}
+      min={min}
+      max={max}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        setEditing(false);
+        if (draft !== String(value)) onChange(draft);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          setEditing(false);
+          if (draft !== String(value)) onChange(draft);
+        }
+        if (e.key === 'Escape') {
+          setEditing(false);
+          setDraft(String(value));
+        }
+      }}
+      className={`w-full px-1 py-0.5 rounded border border-sunflower-400 text-sm focus:outline-none focus:ring-1 focus:ring-sunflower-400 bg-white ${className}`}
+    />
   );
 }
 
-// ── Main Component — Spreadsheet-style table ──────────────
+// ── Select Cell ───────────────────────────────────────
+function SelectCell({
+  value,
+  options,
+  onChange,
+  className = '',
+}: {
+  value: string;
+  options: string[];
+  onChange: (val: string) => void;
+  className?: string;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className={`bg-transparent text-xs border-0 cursor-pointer hover:bg-sunflower-100 rounded px-0 py-0.5 focus:outline-none focus:ring-1 focus:ring-sunflower-400 ${className}`}
+    >
+      {options.map((opt) => (
+        <option key={opt} value={opt}>{opt}</option>
+      ))}
+    </select>
+  );
+}
+
+// ── Checkbox Cell ─────────────────────────────────────
+function CheckCell({
+  checked,
+  onChange,
+}: {
+  checked: boolean;
+  onChange: (val: boolean) => void;
+}) {
+  return (
+    <input
+      type="checkbox"
+      checked={checked}
+      onChange={(e) => onChange(e.target.checked)}
+      className="w-4 h-4 rounded text-sunflower-500 focus:ring-sunflower-400 cursor-pointer"
+    />
+  );
+}
+
+// ── New Row ──────────────────────────────────────────
+function NewRow({
+  nextId,
+  onSave,
+  onCancel,
+}: {
+  nextId: number;
+  onSave: (data: Record<string, any>) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState('');
+  const [tickets, setTickets] = useState('1');
+  const [plusOne, setPlusOne] = useState(false);
+  const [type, setType] = useState('Guest');
+  const [category, setCategory] = useState('');
+  const [phone, setPhone] = useState('');
+  const [email, setEmail] = useState('');
+  const nameRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    nameRef.current?.focus();
+  }, []);
+
+  const save = () => {
+    if (!name.trim()) return;
+    const data: Record<string, any> = {
+      name: name.trim(),
+      tickets: parseInt(tickets) || 1,
+      plusOne,
+      type,
+    };
+    if (phone.trim()) data.phone = phone.trim();
+    if (email.trim()) data.email = email.trim();
+    if (category.trim()) data.category = category.trim();
+    onSave(data);
+  };
+
+  return (
+    <tr className="bg-green-50 border-2 border-green-300">
+      <td className="py-1.5 px-2 text-center text-xs text-gray-400 font-mono">{nextId}</td>
+      <td className="py-1.5 px-2">
+        <input ref={nameRef} type="text" value={name} onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') save(); if (e.key === 'Escape') onCancel(); }}
+          placeholder="Guest name *"
+          className="w-full px-1 py-0.5 rounded border border-green-400 text-sm focus:outline-none focus:ring-1 focus:ring-green-400 bg-white" />
+      </td>
+      <td className="py-1.5 px-2 text-center">
+        <input type="number" value={tickets} min={1} max={20} onChange={(e) => setTickets(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') save(); }}
+          className="w-12 px-1 py-0.5 rounded border border-green-400 text-sm text-center focus:outline-none focus:ring-1 focus:ring-green-400 bg-white" />
+      </td>
+      <td className="py-1.5 px-2 text-center">
+        <input type="checkbox" checked={plusOne} onChange={(e) => setPlusOne(e.target.checked)}
+          className="w-4 h-4 rounded text-sunflower-500 focus:ring-sunflower-400" />
+      </td>
+      <td className="py-1.5 px-2">
+        <select value={type} onChange={(e) => setType(e.target.value)}
+          className="text-xs border border-green-400 rounded px-1 py-0.5 bg-white focus:outline-none">
+          <option value="Guest">Guest</option>
+          <option value="Longform">Longform</option>
+          <option value="Influencers">Influencers</option>
+        </select>
+      </td>
+      <td className="py-1.5 px-2">
+        <input type="text" value={category} onChange={(e) => setCategory(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') save(); }}
+          placeholder="Cat."
+          className="w-full px-1 py-0.5 rounded border border-green-400 text-xs focus:outline-none bg-white" />
+      </td>
+      <td className="py-1.5 px-2">
+        <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') save(); }}
+          placeholder="Phone"
+          className="w-full px-1 py-0.5 rounded border border-green-400 text-xs focus:outline-none bg-white" />
+      </td>
+      <td className="py-1.5 px-2">
+        <input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') save(); }}
+          placeholder="Email"
+          className="w-full px-1 py-0.5 rounded border border-green-400 text-xs focus:outline-none bg-white" />
+      </td>
+      <td className="py-1.5 px-2 text-center">
+        <div className="flex gap-0.5 justify-center">
+          <button onClick={save} disabled={!name.trim()}
+            className="px-2 py-0.5 rounded bg-green-500 text-white text-[10px] font-bold disabled:opacity-40 hover:bg-green-600">
+            ✓
+          </button>
+          <button onClick={onCancel}
+            className="px-2 py-0.5 rounded bg-gray-200 text-gray-600 text-[10px] font-bold hover:bg-gray-300">
+            ✕
+          </button>
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+// ── Main Component ───────────────────────────────────
 export default function ManageGuests({ guests, onBack }: ManageGuestsProps) {
-  const [editingGuest, setEditingGuest] = useState<Guest | null>(null);
   const [addingNew, setAddingNew] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [toast, setToast] = useState('');
@@ -147,21 +240,20 @@ export default function ManageGuests({ guests, onBack }: ManageGuestsProps) {
   };
 
   const sorted = [...guests].sort((a, b) => {
-    const numA = parseInt(a.id) || 9999;
-    const numB = parseInt(b.id) || 9999;
-    return numA - numB;
+    const na = parseInt(a.id) || 9999;
+    const nb = parseInt(b.id) || 9999;
+    return na - nb;
   });
 
   const totalTickets = guests.reduce((sum, g) => sum + (g.tickets || 1), 0);
 
-  const handleUpdate = async (id: string, data: Record<string, any>) => {
+  // Direct inline field update
+  const patchField = async (id: string, field: string, value: any) => {
     try {
-      await updateDoc(doc(db, COLLECTION, id), data);
-      setEditingGuest(null);
-      showToast('✓ Updated');
+      await updateDoc(doc(db, COLL, id), { [field]: value });
     } catch (err) {
-      console.error('Update failed:', err);
-      showToast('❌ Update failed');
+      console.error(`Failed to update ${field}:`, err);
+      showToast(`❌ Failed to save`);
     }
   };
 
@@ -171,17 +263,17 @@ export default function ManageGuests({ guests, onBack }: ManageGuestsProps) {
         const n = parseInt(g.id);
         return !isNaN(n) && n > max ? n : max;
       }, 0);
+      const nextId = String(maxId + 1);
       const docData: Record<string, any> = {
         ...data,
-        id: String(maxId + 1),
         checkedIn: false,
         checkedInAt: null,
         checkedInBy: null,
         addedOnSite: false,
       };
-      await addDoc(collection(db, COLLECTION), docData);
+      await setDoc(doc(db, COLL, nextId), docData);
       setAddingNew(false);
-      showToast(`✓ ${data.name} added`);
+      showToast(`✓ ${data.name} added (#${nextId})`);
     } catch (err) {
       console.error('Add failed:', err);
       showToast('❌ Add failed');
@@ -190,7 +282,7 @@ export default function ManageGuests({ guests, onBack }: ManageGuestsProps) {
 
   const handleDelete = async (id: string, name: string) => {
     try {
-      await deleteDoc(doc(db, COLLECTION, id));
+      await deleteDoc(doc(db, COLL, id));
       setDeleteConfirm(null);
       showToast(`✓ ${name} removed`);
     } catch (err) {
@@ -198,6 +290,11 @@ export default function ManageGuests({ guests, onBack }: ManageGuestsProps) {
       showToast('❌ Remove failed');
     }
   };
+
+  const nextId = guests.reduce((max, g) => {
+    const n = parseInt(g.id);
+    return !isNaN(n) && n > max ? n : max;
+  }, 0) + 1;
 
   return (
     <div className="min-h-screen bg-gray-50 pb-24">
@@ -209,16 +306,16 @@ export default function ManageGuests({ guests, onBack }: ManageGuestsProps) {
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
-            Event Mode
+            Back
           </button>
-          <h1 className="text-lg font-bold text-gray-900">🌻 Manage Guests</h1>
-          <button onClick={() => { setAddingNew(true); setEditingGuest(null); }}
-            className="text-sm font-bold bg-sunflower-500 text-white px-3 py-1.5 rounded-lg hover:bg-sunflower-600 active:bg-sunflower-700">
-            + Add
+          <h1 className="text-lg font-bold text-gray-900">🌻 Guest Sheet</h1>
+          <button onClick={() => setAddingNew(true)}
+            className="text-sm font-bold bg-green-500 text-white px-3 py-1.5 rounded-lg hover:bg-green-600 active:bg-green-700">
+            + Row
           </button>
         </div>
 
-        {/* Summary bar — BIG total tickets */}
+        {/* Big Totals */}
         <div className="flex items-center justify-around mt-3 bg-sunflower-50 rounded-xl py-3 px-4 border border-sunflower-200">
           <div className="text-center">
             <span className="text-3xl font-extrabold text-sunflower-700">{totalTickets}</span>
@@ -234,9 +331,12 @@ export default function ManageGuests({ guests, onBack }: ManageGuestsProps) {
             <span className="text-2xl font-bold text-gray-700">
               {(totalTickets / (guests.length || 1)).toFixed(1)}
             </span>
-            <span className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider">Avg/Guest</span>
+            <span className="block text-[11px] font-bold text-gray-500 uppercase tracking-wider">Avg</span>
           </div>
         </div>
+        <p className="text-[10px] text-gray-400 text-center mt-1.5">
+          Click any cell to edit · Enter to save · Esc to cancel
+        </p>
       </div>
 
       {/* Toast */}
@@ -248,128 +348,143 @@ export default function ManageGuests({ guests, onBack }: ManageGuestsProps) {
 
       {/* Spreadsheet Table */}
       <div className="overflow-x-auto">
-        <table className="w-full text-left text-sm min-w-[640px]">
-          <thead className="bg-gray-100 sticky top-[140px] z-10">
-            <tr className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
-              <th className="py-2 px-2 text-center w-10">#</th>
-              <th className="py-2 px-2">Name</th>
-              <th className="py-2 px-2 text-center w-14">🎟</th>
-              <th className="py-2 px-2 text-center w-10">+1</th>
-              <th className="py-2 px-2 w-20">Type</th>
-              <th className="py-2 px-2 w-16">Cat.</th>
-              <th className="py-2 px-2 w-24">Phone</th>
-              <th className="py-2 px-2 text-center w-16">Actions</th>
+        <table className="w-full text-left text-xs min-w-[720px] border-collapse">
+          <thead className="bg-gray-100 sticky top-[152px] z-10 border-b-2 border-gray-300">
+            <tr className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">
+              <th className="py-2 px-2 text-center w-8 border-r border-gray-200">#</th>
+              <th className="py-2 px-2 min-w-[140px] border-r border-gray-200">Name</th>
+              <th className="py-2 px-2 text-center w-12 border-r border-gray-200">🎟</th>
+              <th className="py-2 px-2 text-center w-8 border-r border-gray-200">+1</th>
+              <th className="py-2 px-2 w-20 border-r border-gray-200">Type</th>
+              <th className="py-2 px-2 w-16 border-r border-gray-200">Category</th>
+              <th className="py-2 px-2 w-24 border-r border-gray-200">Phone</th>
+              <th className="py-2 px-2 w-32 border-r border-gray-200">Email</th>
+              <th className="py-2 px-2 text-center w-12">Del</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-100">
-            {sorted.map((guest, idx) => (
-              <tr
-                key={guest.id}
-                className={`${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'} hover:bg-sunflower-50/50 transition-colors`}
-              >
-                <td className="py-2 px-2 text-center text-xs text-gray-400 font-mono">
-                  {parseInt(guest.id) || '—'}
+          <tbody>
+            {sorted.map((g, idx) => (
+              <tr key={g.id}
+                className={`${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/60'} hover:bg-sunflower-50/40 border-b border-gray-100`}>
+                {/* # */}
+                <td className="py-1 px-2 text-center text-[10px] text-gray-400 font-mono border-r border-gray-100">
+                  {parseInt(g.id) || '·'}
                 </td>
-                <td className="py-2 px-2 font-medium text-gray-900 whitespace-nowrap">
-                  {guest.name}
-                  {guest.notes && (
-                    <span className="text-[10px] text-gray-400 ml-1">({guest.notes})</span>
-                  )}
+                {/* Name */}
+                <td className="py-1 px-1 border-r border-gray-100">
+                  <EditableCell
+                    value={g.name}
+                    onChange={(v) => patchField(g.id, 'name', v.trim())}
+                    className="text-xs font-medium text-gray-900"
+                  />
                 </td>
-                <td className="py-2 px-2 text-center">
-                  <span className="inline-block min-w-[24px] text-center font-bold text-sunflower-700 bg-sunflower-100 rounded px-1.5 py-0.5 text-xs">
-                    {guest.tickets}
-                  </span>
+                {/* Tickets */}
+                <td className="py-1 px-1 text-center border-r border-gray-100">
+                  <EditableCell
+                    value={g.tickets}
+                    type="number"
+                    min={1}
+                    max={20}
+                    onChange={(v) => patchField(g.id, 'tickets', parseInt(v) || 1)}
+                    className="text-xs font-bold text-sunflower-700 text-center"
+                  />
                 </td>
-                <td className="py-2 px-2 text-center text-xs">
-                  {guest.plusOne ? '✓' : '—'}
+                {/* Plus One */}
+                <td className="py-1 px-2 text-center border-r border-gray-100">
+                  <CheckCell
+                    checked={g.plusOne ?? false}
+                    onChange={(v) => patchField(g.id, 'plusOne', v)}
+                  />
                 </td>
-                <td className="py-2 px-2">
-                  <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${TYPE_BG[guest.type] ?? 'bg-gray-100 text-gray-600'}`}>
-                    {guest.type}
-                  </span>
+                {/* Type */}
+                <td className="py-1 px-1 border-r border-gray-100">
+                  <SelectCell
+                    value={g.type}
+                    options={['Guest', 'Longform', 'Influencers']}
+                    onChange={(v) => patchField(g.id, 'type', v)}
+                  />
                 </td>
-                <td className="py-2 px-2 text-xs text-gray-500 truncate max-w-[60px]">
-                  {guest.category || '—'}
+                {/* Category */}
+                <td className="py-1 px-1 border-r border-gray-100">
+                  <EditableCell
+                    value={g.category || ''}
+                    placeholder="—"
+                    onChange={(v) => patchField(g.id, 'category', v.trim())}
+                    className="text-xs text-gray-500"
+                  />
                 </td>
-                <td className="py-2 px-2 text-xs text-gray-500 whitespace-nowrap">
-                  {guest.phone || '—'}
+                {/* Phone */}
+                <td className="py-1 px-1 border-r border-gray-100">
+                  <EditableCell
+                    value={g.phone || ''}
+                    type="tel"
+                    placeholder="—"
+                    onChange={(v) => patchField(g.id, 'phone', v.trim())}
+                    className="text-xs text-gray-500"
+                  />
                 </td>
-                <td className="py-2 px-2 text-center">
-                  <div className="flex items-center justify-center gap-1">
-                    <button
-                      onClick={() => { setEditingGuest(guest); setAddingNew(false); }}
-                      className="p-1 rounded hover:bg-gray-200 text-gray-500"
-                      title="Edit"
-                    >
+                {/* Email */}
+                <td className="py-1 px-1 border-r border-gray-100">
+                  <EditableCell
+                    value={g.email || ''}
+                    type="email"
+                    placeholder="—"
+                    onChange={(v) => patchField(g.id, 'email', v.trim())}
+                    className="text-xs text-gray-500"
+                  />
+                </td>
+                {/* Delete */}
+                <td className="py-1 px-2 text-center">
+                  {deleteConfirm === g.id ? (
+                    <div className="flex gap-0.5 justify-center">
+                      <button onClick={() => handleDelete(g.id, g.name)}
+                        className="px-1.5 py-0.5 rounded bg-red-500 text-white text-[9px] font-bold">
+                        Yes
+                      </button>
+                      <button onClick={() => setDeleteConfirm(null)}
+                        className="px-1.5 py-0.5 rounded bg-gray-200 text-gray-600 text-[9px] font-bold">
+                        No
+                      </button>
+                    </div>
+                  ) : (
+                    <button onClick={() => setDeleteConfirm(g.id)}
+                      className="p-1 rounded hover:bg-red-50 text-gray-300 hover:text-red-500">
                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                          d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                       </svg>
                     </button>
-                    {deleteConfirm === guest.id ? (
-                      <div className="flex gap-0.5">
-                        <button onClick={() => handleDelete(guest.id, guest.name)}
-                          className="px-1.5 py-0.5 rounded bg-red-500 text-white text-[10px] font-bold">
-                          Yes
-                        </button>
-                        <button onClick={() => setDeleteConfirm(null)}
-                          className="px-1.5 py-0.5 rounded bg-gray-200 text-gray-600 text-[10px] font-bold">
-                          No
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => setDeleteConfirm(guest.id)}
-                        className="p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-500"
-                        title="Remove"
-                      >
-                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                            d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
-                    )}
-                  </div>
+                  )}
                 </td>
               </tr>
             ))}
+
+            {/* New row (inline, at bottom of table) */}
+            {addingNew && (
+              <NewRow
+                nextId={nextId}
+                onSave={handleAdd}
+                onCancel={() => setAddingNew(false)}
+              />
+            )}
           </tbody>
         </table>
       </div>
 
-      {/* Edit Modal */}
-      {editingGuest && (
-        <EditModal
-          guest={editingGuest}
-          title={`Edit: ${editingGuest.name}`}
-          onSave={(data) => handleUpdate(editingGuest.id, data)}
-          onCancel={() => setEditingGuest(null)}
-        />
+      {/* Floating add row button */}
+      {!addingNew && (
+        <button
+          onClick={() => setAddingNew(true)}
+          className="fixed bottom-6 right-6 z-40 w-14 h-14 rounded-full
+                     bg-green-500 text-white shadow-lg
+                     hover:bg-green-600 active:bg-green-700
+                     flex items-center justify-center text-3xl
+                     transition-all duration-150"
+          aria-label="Add new row"
+        >
+          +
+        </button>
       )}
-
-      {/* Add Modal */}
-      {addingNew && (
-        <EditModal
-          guest={{}}
-          title="Add New Guest"
-          onSave={(data) => handleAdd(data)}
-          onCancel={() => setAddingNew(false)}
-        />
-      )}
-
-      {/* Floating add button */}
-      <button
-        onClick={() => { setAddingNew(true); setEditingGuest(null); }}
-        className="fixed bottom-6 right-6 z-40 w-14 h-14 rounded-full
-                   bg-sunflower-500 text-white shadow-lg
-                   hover:bg-sunflower-600 active:bg-sunflower-700
-                   flex items-center justify-center text-3xl
-                   transition-all duration-150"
-        aria-label="Add guest"
-      >
-        +
-      </button>
     </div>
   );
 }
